@@ -35,7 +35,7 @@ export default function Nav() {
             const tlNames = await invoke('get_tl_names');
             // 配列を受け取る形式に変更
             if (Array.isArray(tlNames)) {
-                setTlList(tlNames);
+                setTlList(tlNames.map(name => name.slice(4)));
             } else {
                 console.error('TL一覧の形式が不正:', tlNames);
                 toast.error('TL一覧の取得に失敗しちゃった(´；ω；`)', {

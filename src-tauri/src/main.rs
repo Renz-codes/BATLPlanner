@@ -10,12 +10,6 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Serialize)]
-struct TLName {
-    name: String,
-    created_at: String,
-}
-
-#[derive(Serialize)]
 struct CreateTLResponse {
     success: bool,
     path: Option<String>,
@@ -84,7 +78,7 @@ struct HenseiData {
 }
 
 // データベースパスを定数として定義
-const DB_PATH: &str = "../app-data/tlplanner.db";
+const DB_PATH: &str = "./app-data/tlplanner.db";
 
 
 
@@ -334,7 +328,7 @@ fn get_tl_data(tlname: &str) -> TLData {
 #[tauri::command]
 fn update_tl_settings(tlname: &str, boss_name: &str, cost_at_first: f64, difficulty: &str, time_of_another_battle: f64) -> bool {
     match Connection::open(DB_PATH) {
-        Ok(mut conn) => {
+        Ok(conn) => {
             let result = conn.execute(
                 "UPDATE tlsettings SET boss_name = ?, cost_at_first = ?, difficulty = ?, time_of_another_battle = ? WHERE name = ?",
                 [boss_name, &cost_at_first.to_string(), difficulty, &time_of_another_battle.to_string(), tlname]
