@@ -84,7 +84,7 @@ struct HenseiData {
 }
 
 // データベースパスを定数として定義
-const DB_PATH: &str = "./app-data/tlplanner.db";
+const DB_PATH: &str = "../app-data/tlplanner.db";
 
 
 

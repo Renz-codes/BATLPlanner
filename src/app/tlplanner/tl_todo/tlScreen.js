@@ -154,10 +154,10 @@ const SortableTableRow = React.memo(({
   let availableSuggestionsWithCategory = [];
   if (availableSuggestions) {
     availableSuggestionsWithCategory = availableSuggestions.map(suggestion => {
-      if (party.includes(suggestion.replace("(リオ©)", ""))) {
+      if (party.includes(suggestion.replace("(リオ©)", "").replace("ブチギレ", ""))) {
         return {
           name: suggestion,
-          role: partyWithCategory.find(item => item.name === suggestion.replace("(リオ©)", ""))?.role + "(EX)",
+          role: partyWithCategory.find(item => item.name === suggestion.replace("(リオ©)", "").replace("ブチギレ", ""))?.role + "(EX)",
         };
       } else if (suggestion.endsWith("NS") || suggestion.endsWith("SS")) {
         return {
@@ -999,9 +999,9 @@ export default function TlScreen({ tlname }) {
   }
 
   // 特定の行で選択可能なサジェスト候補を取得
-  const getAvailableSuggestionsForRow = useCallback((party, rowCol) => {
+  const getAvailableSuggestionsForRow = useCallback((party, rowCol, costRecovery, prevCost, prevElapsedTime, newElapsedTimes) => {
     let availableSuggestions = [...party];
-    
+
     for (let i = 0; i < party.length; i++) {
       const suggestion = party[i];
       if (oneCostReducer.some(student => student.name === suggestion)) {
@@ -1024,19 +1024,6 @@ export default function TlScreen({ tlname }) {
       if (suggestion === "ヒナ(ドレス)") {
         availableSuggestions = [...availableSuggestions, "ヒナ(ドレス) 1射目", "ヒナ(ドレス) 2射目", "ヒナ(ドレス) 3射目"];
       }
-      if (suggestion === "リオ") {
-        let rioList = [];
-        for (let j = 1; j <rowCol; j++) {
-          if (data[j].event && data[j].event === "リオ" && data[j].subject) {
-            rioList = [...rioList, data[j].subject + "(リオ©)"];
-          }
-          if (data[j].event && data[j].event.endsWith("(リオ©)")) {
-            rioList = rioList.filter(item => item !== data[j].event);
-          }
-        }
-        availableSuggestions = [...availableSuggestions, ...rioList];
-      }
-
       if (exCostBoost.some(student => student.name === suggestion)) {
         if (suggestion === "ノア(パジャマ)") {
           let noaTimes = 0;
@@ -1076,8 +1063,44 @@ export default function TlScreen({ tlname }) {
           }
         }
       }
+
+      if (suggestion === "ネル(制服)") {
+        let neruTimes = 0
+        for (let j = rowCol-1; j > 0; j--) {
+          if (data[j].event && data[j].event.replace("(リオ©)", "") === "ネル(制服)ブチギレ") {
+            neruTimes++;
+            if (neruTimes === 5) {
+              break;
+            }
+          }
+          const usingValue = data[rowCol].timing? data[rowCol].timing : 4;
+          const usingTiming = formatTimingValue(usingValue, costRecovery, prevCost, prevElapsedTime, rowCol, newElapsedTimes)
+          if (data[j].event && data[j].event.replace("(リオ©)", "") === "ネル(制服)" && neruTimes < 5 && (usingTiming - newElapsedTimes[j]) <= 70) {
+            availableSuggestions = [...availableSuggestions, "ネル(制服)ブチギレ"];
+            break;
+          }
+        }
+      }
     }
-    
+    // リオに関する処理は一番最後に行う
+    if (party.includes("リオ")) {
+      for (let j = rowCol-1; j > 0; j--) {
+        if (data[j].event && data[j].event === "リオ" && data[j].subject) {
+          if (data[j].subject === "ネル(制服)") {
+            availableSuggestions = [...availableSuggestions, "ネル(制服)(リオ©)"];
+            if (availableSuggestions.includes("ネル(制服)ブチギレ")) {
+              availableSuggestions = [...availableSuggestions, "ネル(制服)ブチギレ(リオ©)"];
+            }
+          } else {
+            availableSuggestions = [...availableSuggestions, data[j].subject + "(リオ©)"];
+          }
+          break;
+        }
+        if (data[j].event && data[j].event.endsWith("(リオ©)")) {
+          break;
+        }
+      }
+    }
     availableSuggestions.sort((a, b) => a.localeCompare(b));
 
     return availableSuggestions;
@@ -1101,101 +1124,101 @@ export default function TlScreen({ tlname }) {
     }
 };
 
-    // データの取得
-    const fetchData = async () => {
-        try {
-            // TLデータを取得
-            const fetchedData = await invoke('get_tl_all_data', { tlname });
-            
-            // 戦闘設定を取得
-            const settings = await invoke('get_tl_settings', { tlname });
-            if (settings) {
-                if (settings.boss_name) {
-                    bossName = settings.boss_name;
-                    battleTime = bossProperties.find(boss => boss.name === bossName)?.battleTime || 240;
-                }
-                if (settings.cost_at_first !== undefined) {
-                    initialCost = settings.cost_at_first;
-                }
-                if (settings.difficulty !== undefined) {
-                    difficulty = settings.difficulty;
-                }
-                if (settings.time_of_another_battle !== undefined) {
-                    timeOfAnotherBattle = settings.time_of_another_battle;
-                }
-            }
-            
-            // 新しい処理：戦闘開始行が存在するかにかかわらず、必ず最初に削除してから追加する
-            let updatedData = [...fetchedData];
-            let updatedCalculatedValues = [...calculatedValues];
+  // データの取得
+  const fetchData = async () => {
+      try {
+          // TLデータを取得
+          const fetchedData = await invoke('get_tl_all_data', { tlname });
+          
+          // 戦闘設定を取得
+          const settings = await invoke('get_tl_settings', { tlname });
+          if (settings) {
+              if (settings.boss_name) {
+                  bossName = settings.boss_name;
+                  battleTime = bossProperties.find(boss => boss.name === bossName)?.battleTime || 240;
+              }
+              if (settings.cost_at_first !== undefined) {
+                  initialCost = settings.cost_at_first;
+              }
+              if (settings.difficulty !== undefined) {
+                  difficulty = settings.difficulty;
+              }
+              if (settings.time_of_another_battle !== undefined) {
+                  timeOfAnotherBattle = settings.time_of_another_battle;
+              }
+          }
+          
+          // 新しい処理：戦闘開始行が存在するかにかかわらず、必ず最初に削除してから追加する
+          let updatedData = [...fetchedData];
+          let updatedCalculatedValues = [...calculatedValues];
 
-            // 戦闘開始行（col=0の行）が存在するか確認
-            const hasBattleStartRow = updatedData.some(row => row.col === 0 && row.event === "戦闘開始");
-            
-            // 存在する場合は削除
-            if (hasBattleStartRow) {
-                updatedData = updatedData.filter(row => row.col !== 0);
-                updatedCalculatedValues = updatedCalculatedValues.filter(row => row.col !== 0);
-            }
-            
-            // 新しい戦闘開始行を作成
-            const bminutes = Math.floor((battleTime-2) / 60);
-            const bseconds = Math.floor((battleTime-2) % 60);
-            const bms = Math.floor((battleTime-2) % 1 * 1000);
-            const timeDisplay = `${bminutes}:${bseconds.toString().padStart(2, '0')}.${bms.toString().padStart(3, '0')}`;
-            const battleStartRow = {
-                tlname,
-                col: 0,
-                event: "戦闘開始",
-                timing: "",
-                late: false,
-                subject: "",
-                memo: "",
-                dropout: '[]'
-            };
-            
-            const calculatedBattleStartRow = {
-                col: 0,
-                remainingTime: timeDisplay,
-                remainingCost: initialCost,
-                elapsedTime: 2.0,
-                displayCost: 0.0,
-                party: [],
-                suggestion: [],
-                cumulativeCost: 0,
-                costRecovery: null,
-                costRecoveryToDisplay: null,
-                requiredCost: null,
-                timingRemainingTime: null,
-                overflowCost: 0.0,
-                score: 0,
-            }
+          // 戦闘開始行（col=0の行）が存在するか確認
+          const hasBattleStartRow = updatedData.some(row => row.col === 0 && row.event === "戦闘開始");
+          
+          // 存在する場合は削除
+          if (hasBattleStartRow) {
+              updatedData = updatedData.filter(row => row.col !== 0);
+              updatedCalculatedValues = updatedCalculatedValues.filter(row => row.col !== 0);
+          }
+          
+          // 新しい戦闘開始行を作成
+          const bminutes = Math.floor((battleTime-2) / 60);
+          const bseconds = Math.floor((battleTime-2) % 60);
+          const bms = Math.floor((battleTime-2) % 1 * 1000);
+          const timeDisplay = `${bminutes}:${bseconds.toString().padStart(2, '0')}.${bms.toString().padStart(3, '0')}`;
+          const battleStartRow = {
+              tlname,
+              col: 0,
+              event: "戦闘開始",
+              timing: "",
+              late: false,
+              subject: "",
+              memo: "",
+              dropout: '[]'
+          };
+          
+          const calculatedBattleStartRow = {
+              col: 0,
+              remainingTime: timeDisplay,
+              remainingCost: initialCost,
+              elapsedTime: 2.0,
+              displayCost: 0.0,
+              party: [],
+              suggestion: [],
+              cumulativeCost: 0,
+              costRecovery: null,
+              costRecoveryToDisplay: null,
+              requiredCost: null,
+              timingRemainingTime: null,
+              overflowCost: 0.0,
+              score: 0,
+          }
 
-            // 戦闘開始行を先頭に追加
-            updatedData.unshift(battleStartRow);
-            updatedCalculatedValues.unshift(calculatedBattleStartRow);
+          // 戦闘開始行を先頭に追加
+          updatedData.unshift(battleStartRow);
+          updatedCalculatedValues.unshift(calculatedBattleStartRow);
 
-            setData(updatedData);
-            setCalculatedValues(updatedCalculatedValues);
-            
-            // 履歴を初期化
-            setHistory([updatedData]);
-            setHistoryIndex(0);
-            
-            // 成功メッセージを表示
-            toast.success('データを読み込んだよ～♪', {
-                icon: '📚',
-                duration: 1500,
-            });
-            
-        } catch (error) {
-            console.error('データの取得でエラーが発生しました:', error);
-            toast.error('データの取得に失敗しました(´；ω；`)', {
-                duration: 3000,
-                icon: '😿'
-            });
-        }
-    };
+          setData(updatedData);
+          setCalculatedValues(updatedCalculatedValues);
+          
+          // 履歴を初期化
+          setHistory([updatedData]);
+          setHistoryIndex(0);
+          
+          // 成功メッセージを表示
+          toast.success('データを読み込んだよ～♪', {
+              icon: '📚',
+              duration: 1500,
+          });
+          
+      } catch (error) {
+          console.error('データの取得でエラーが発生しました:', error);
+          toast.error('データの取得に失敗しました(´；ω；`)', {
+              duration: 3000,
+              icon: '😿'
+          });
+      }
+  };
 
   // 行の削除
   const deleteRow = async (colToDelete) => {
@@ -1237,7 +1260,7 @@ export default function TlScreen({ tlname }) {
         // エラーが起きたら最新データを再取得
         await fetchData();
     }
-};
+  };
 
   // saveAllData関数の修正
   const saveAllData = async () => {
@@ -1716,19 +1739,23 @@ export default function TlScreen({ tlname }) {
         noaflag = true;
       }
     }
-    const excostEntry = excosts.find(student => student.name === event);
+    const excostEntry = excosts.find(student => student.name === event.replace("ブチギレ", ""));
     if (!excostEntry) {
       return 0;
     }
     const rioOne = rioflag ? 1 : 0;
     const noaTwo = noaflag ? 2 : 0;
     let requiredCost = excostEntry.excost - rioOne - noaTwo;
+    if (event === "ネル(制服)ブチギレ") {
+      requiredCost = 4 - rioOne;
+      event = "ネル(制服)";
+    }
     let times = 0;
     const maxTimes = costHalver.reduce((max, student) => Math.max(max, student.times), -Infinity);
     // フウカ(正月)やウイセイアの半減やマリー(アイドル)やココナの1回減らしの処理
     for (let i = col-1; i > 0; i--) {
       const row = data[i];
-      const rowEvent = row.event.replace("(リオ©)", "");
+      const rowEvent = row.event.replace("(リオ©)", "").replace("ブチギレ", "");
       if (rowEvent === event) {
         times++;
         if (times === maxTimes) {
@@ -1759,6 +1786,7 @@ export default function TlScreen({ tlname }) {
     }
     return requiredCost;
   }
+
   // 計算結果のステートを更新する関数
   const updateCalculatedValues = useCallback(() => {
     // 各行についての計算結果を格納するステート
@@ -1835,15 +1863,25 @@ export default function TlScreen({ tlname }) {
       // 現在のパーティを取得
       const party = getCurrentParty(i);
       newPartys[i] = party;
-      // サジェスト候補の取得
-      const availableSuggestions = getAvailableSuggestionsForRow(party, i);
-      newSuggestions[i] = availableSuggestions;
 
       // 残り時間と残りコストの計算
       // まずはコスト回復力の計算
       const costRecovery = calculateCostRecovery(party, row);
       newCostRecovery[i] = costRecovery;
       newCostRecoveryToDisplay[i] = costRecovery.toFixed(4);
+      
+      // 前の行の残りコストを取得
+      let prevCost = 0;
+      const prevCostValue = newRemainingCosts[prevRowCol];
+      if (prevCostValue) {
+        prevCost = parseFloat(prevCostValue);
+      }
+
+      // 前の行の経過時間を取得
+      const prevElapsedTime = newElapsedTimes[prevRowCol];
+      // サジェスト候補の取得
+      const availableSuggestions = getAvailableSuggestionsForRow(party, i, costRecovery, prevCost, prevElapsedTime, newElapsedTimes);
+      newSuggestions[i] = availableSuggestions; 
 
       // イベント列が空の場合は前の行の値をコピー
       if (!row.event || row.event.trim() === "") {
@@ -1854,14 +1892,7 @@ export default function TlScreen({ tlname }) {
       } else {
         // 必要コスト/回復力で時間を計算（回復力が0の場合はエラーを防ぐ）
         if (costRecovery > 0) {
-          // 前の行の残りコストを取得
-          let prevCost = 0;
-          const prevCostValue = newRemainingCosts[prevRowCol];
-          if (prevCostValue) {
-            prevCost = parseFloat(prevCostValue);
-          }
-          // 前の行の経過時間を取得
-          const prevElapsedTime = newElapsedTimes[prevRowCol];
+
 
           if (row.event.replace("(リオ©)", "") === "ヒナ(ドレス)" || row.event === "ヒナ(ドレス) 1射目" || row.event === "ヒナ(ドレス) 2射目" || row.event === "ヒナ(ドレス) 3射目") {
             let dressHina = i;
