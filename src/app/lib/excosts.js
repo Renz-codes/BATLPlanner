@@ -1234,5 +1234,11 @@ export const excosts = [
 		name: "レイ",
 		excost: 4,
 		role: "striker"
+	},
+	{
+		id: 207,
+		name: "サオリ(ドレス)",
+		excost: 4,
+		role: "striker"
 	}
 ]

@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "com.tlplanner.dev",
   "productName": "Blue_Archive_TL_Planner",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "build": {
     "beforeBuildCommand": "npm run build",
     "beforeDevCommand": "npm run dev",

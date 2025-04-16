@@ -806,15 +806,14 @@ export default function TlScreen({ tlname }) {
   //   costRecovery: {},
   //   costRecoveryToDisplay: {},
   //   requiredCost: {},
-  //   timingRemainingTime: {},
   //   overflowCost: {},
   //   score: {},
   //   [fields]: {},
   // });
   const [calculatedValues, setCalculatedValues] = useState([]);
-
-  // // タイミングに入力された値をm:ss.msに変換して格納する
-  // const [timingRemainingTime, setTimingRemainingTime] = useState([]);
+  let noaTimes = 0;
+  let charaToTiming = {};
+  let sortedCostEvents = [];
 
   // データの変更を履歴に追加する関数
   const addToHistory = (newData) => {
@@ -946,12 +945,14 @@ export default function TlScreen({ tlname }) {
         console.error(`行${col}が見つかりません`);
         return;
       }
-
+      const newDropoutJSON = JSON.stringify(newDropouts);
+      const hasDropout = newDropouts.length > 0;
       // データを変換
       const updatedData = data.map(item => 
         item.col === col ? { 
           ...item, 
-          dropout: JSON.stringify(newDropouts)
+          event: hasDropout ? newDropouts.join("、") + "(脱落)" : "",
+          dropout: newDropoutJSON
         } : item
       );
       
@@ -985,21 +986,71 @@ export default function TlScreen({ tlname }) {
     }
   };
 
-  const getCurrentParty = (rowCol) => {
-    // その行までの脱落キャラを取得
-    const droppedOutCharacters = getDropoutsUpToRow(data, rowCol);
+  const calculateRemainingCostAndCostRecovery = useCallback((now, prevCostRecovery, prevCost, prevElapsedTime) => {
+    const filteredCostEvents = sortedCostEvents.filter(event => event.elapsedTime >= prevElapsedTime);
+    if (filteredCostEvents.length === 0) {
+      return [prevCost + prevCostRecovery*(now - prevElapsedTime), prevCostRecovery];
+    }
     
-    // すでに脱落したキャラを除外したサジェスト候補を返す
-    const party = suggestions.filter(suggestion => 
-      !droppedOutCharacters.includes(suggestion)
-    );
-    party.sort((a, b) => a.localeCompare(b));
+    let remainingCost = prevCost;
+    let currentCostRecovery = prevCostRecovery;
+    let currentElapsedTime = prevElapsedTime;
+    for (let i = 0; i < filteredCostEvents.length && filteredCostEvents[i].elapsedTime <= now; i++) {
+      remainingCost += currentCostRecovery * (filteredCostEvents[i].elapsedTime - currentElapsedTime);
+      currentElapsedTime = filteredCostEvents[i].elapsedTime;
+      currentCostRecovery += filteredCostEvents[i].costRecovery;
+    }
+    remainingCost += currentCostRecovery*(now - currentElapsedTime);
+    return [remainingCost, currentCostRecovery];
+  }, [sortedCostEvents]);
 
-    return party;
-  }
+  // const inverseCalculateRemainingCost = useCallback((requiredCost, prevCostRecovery, prevCost, prevElapsedTime) => {
+  //   if (requiredCost <= prevCost) {
+  //     return prevElapsedTime;
+  //   }
+  //   const filteredCostEvents = sortedCostEvents.filter(event => event.elapsedTime >= prevElapsedTime);
+  //   if (filteredCostEvents.length === 0) {
+  //     return (requiredCost-prevCost)/prevCostRecovery + prevElapsedTime;
+  //   }
+
+  //   let remainingCost = prevCost;
+  //   let currentCostRecovery = prevCostRecovery;
+  //   let currentElapsedTime = prevElapsedTime;
+  //   let oldRemainingCost = remainingCost;
+  //   let oldCostRecovery = currentCostRecovery;
+  //   let oldElapsedTime = currentElapsedTime;
+  //   for (let i = 0; i < filteredCostEvents.length && remainingCost < requiredCost; i++) {
+  //     oldRemainingCost = remainingCost;
+  //     oldCostRecovery = currentCostRecovery;
+  //     oldElapsedTime = currentElapsedTime;
+  //     remainingCost += currentCostRecovery*(filteredCostEvents[i].elapsedTime - currentElapsedTime);
+  //     currentElapsedTime = filteredCostEvents[i].elapsedTime;
+  //     currentCostRecovery += filteredCostEvents[i].costRecovery;
+  //   }
+  //   return oldElapsedTime + (requiredCost-oldRemainingCost)/oldCostRecovery;
+  // }, [sortedCostEvents]);
+
+  const inverseCalculateRemainingCost = useCallback((requiredCost, prevCostRecovery, prevCost, prevElapsedTime) => {
+    if (requiredCost <= prevCost) {
+      return prevElapsedTime;
+    }
+    let nowLower = prevElapsedTime;
+    let nowUpper = prevElapsedTime + 120.0;
+    while (nowUpper - nowLower > 1e-10) {
+      const now = (nowLower + nowUpper) / 2;
+      const [remainingCost, currentCostRecovery] = calculateRemainingCostAndCostRecovery(now, prevCostRecovery, prevCost, prevElapsedTime);
+      if (remainingCost < requiredCost) {
+        nowLower = now;
+      } else {
+        nowUpper = now;
+      }
+    }
+    return nowUpper;
+  }, [sortedCostEvents]);
+
 
   // 特定の行で選択可能なサジェスト候補を取得
-  const getAvailableSuggestionsForRow = useCallback((party, rowCol, costRecovery, prevCost, prevElapsedTime, newElapsedTimes) => {
+  const getAvailableSuggestionsForRow = useCallback((party, rowCol, prevCostRecovery, prevCost, prevElapsedTime, newElapsedTimes) => {
     let availableSuggestions = [...party];
 
     for (let i = 0; i < party.length; i++) {
@@ -1024,58 +1075,12 @@ export default function TlScreen({ tlname }) {
       if (suggestion === "ヒナ(ドレス)") {
         availableSuggestions = [...availableSuggestions, "ヒナ(ドレス) 1射目", "ヒナ(ドレス) 2射目", "ヒナ(ドレス) 3射目"];
       }
-      if (exCostBoost.some(student => student.name === suggestion)) {
-        if (suggestion === "ノア(パジャマ)") {
-          let noaTimes = 0;
-          let endflag = false;
-          let startflag = false;
-          for (let j = rowCol-1; j > 0; j--) {
-            if (data[j].event.replace("(リオ©)", "") === "ノア(パジャマ)") {
-              noaTimes++;
-            }
-            if (data[j].event === "ノア(パジャマ) end") {
-              endflag = true;
-            }
-            if (endflag === false && data[j].event === "ノア(パジャマ) start") {
-              availableSuggestions = [...availableSuggestions, "ノア(パジャマ) end"];
-              endflag = true;
-              if (noaTimes < 2) {
-                startflag = true;
-              }
-            }
-          }
-          if ((noaTimes%3 === 2) && startflag === false) {
-            availableSuggestions = [...availableSuggestions, "ノア(パジャマ) start"];
-          }
-        } else {
-          for (let j = rowCol-1; j > 0; j--) {
-            if (data[j].event && data[j].event.replace("(リオ©)", "") === suggestion) {
-              availableSuggestions = [...availableSuggestions, suggestion + " start"];
-            break;
-            }
-            if (data[j].event && data[j].event === (suggestion + " start")) {
-              availableSuggestions = [...availableSuggestions, suggestion + " end"];
-              break;
-            }
-            if (data[j].event && data[j].event === (suggestion + " end")) {
-              break;
-            }
-          }
-        }
-      }
 
       if (suggestion === "ネル(制服)") {
-        let neruTimes = 0
         for (let j = rowCol-1; j > 0; j--) {
-          if (data[j].event && data[j].event.replace("(リオ©)", "") === "ネル(制服)ブチギレ") {
-            neruTimes++;
-            if (neruTimes === 5) {
-              break;
-            }
-          }
           const usingValue = data[rowCol].timing? data[rowCol].timing : 4;
-          const usingTiming = formatTimingValue(usingValue, costRecovery, prevCost, prevElapsedTime, rowCol, newElapsedTimes)
-          if (data[j].event && data[j].event.replace("(リオ©)", "") === "ネル(制服)" && neruTimes < 5 && (usingTiming - newElapsedTimes[j]) <= 70) {
+          const usingTiming = formatTimingValue(usingValue, rowCol, prevCostRecovery, prevCost, prevElapsedTime, rowCol, newElapsedTimes)
+          if (data[j].event && data[j].event.replace("(リオ©)", "") === "ネル(制服)" && (usingTiming - newElapsedTimes[j]) <= 70) {
             availableSuggestions = [...availableSuggestions, "ネル(制服)ブチギレ"];
             break;
           }
@@ -1122,7 +1127,7 @@ export default function TlScreen({ tlname }) {
             duration: 2000,
         });
     }
-};
+  };
 
   // データの取得
   const fetchData = async () => {
@@ -1176,30 +1181,11 @@ export default function TlScreen({ tlname }) {
               memo: "",
               dropout: '[]'
           };
-          
-          const calculatedBattleStartRow = {
-              col: 0,
-              remainingTime: timeDisplay,
-              remainingCost: initialCost,
-              elapsedTime: 2.0,
-              displayCost: 0.0,
-              party: [],
-              suggestion: [],
-              cumulativeCost: 0,
-              costRecovery: null,
-              costRecoveryToDisplay: null,
-              requiredCost: null,
-              timingRemainingTime: null,
-              overflowCost: 0.0,
-              score: 0,
-          }
 
           // 戦闘開始行を先頭に追加
           updatedData.unshift(battleStartRow);
-          updatedCalculatedValues.unshift(calculatedBattleStartRow);
 
           setData(updatedData);
-          setCalculatedValues(updatedCalculatedValues);
           
           // 履歴を初期化
           setHistory([updatedData]);
@@ -1484,16 +1470,53 @@ export default function TlScreen({ tlname }) {
     }));
   };
 
-  // コスト回復力の計算処理
-  const calculateCostRecovery = (party, row) => {
-    let recovery = party.length * 0.07;
-    const rowCol = row.col;
+  // 最初のコスト回復力の計算処理
+  const calculateInitialCostRecovery = () => {
+    let recovery = suggestions.length * 0.07;
 
-    const hasCherino = party.includes("チェリノ");
+    const hasCherino = suggestions.includes("チェリノ");
     if (hasCherino) {
       recovery += 0.0511;
       
       // レッドウィンターの人数を数える
+      const redWinterCount = redWinterCharactersWithoutCherino.filter(
+        character => suggestions.includes(character)
+      ).length;
+      
+      const limitedCount = Math.min(redWinterCount, 3);
+      recovery += limitedCount * 0.0146;
+    }
+    
+    const hasBoostCharacter = ssCostBoost.some(booster => 
+      suggestions.includes(booster)
+    );
+    
+    if (hasBoostCharacter) {
+      recovery *= 1.2029;
+    }
+    
+    return recovery;
+  };
+
+  //コスト回復力の計算
+  const calculateCostRecovery = (now, prevCostRecovery, prevElapsedTime) => {
+    if (sortedCostEvents.length === 0) {
+      return prevCostRecovery;
+    }
+    const filteredCostEvents = sortedCostEvents.filter(event => event.elapsedTime >= prevElapsedTime);
+    let currentCostRecovery = prevCostRecovery;
+    for (let i = 0; i < filteredCostEvents.length && filteredCostEvents[i].elapsedTime <= now; i++) {
+      currentCostRecovery += filteredCostEvents[i].costRecovery;
+    }
+    return currentCostRecovery;
+  }
+
+  const calculateCostRecoveryWhenPartyChange = (now, dropout, party) => {
+    let recovery = party.length * 0.07;
+    const hasCherino = party.includes("チェリノ");
+    if (hasCherino) {
+      recovery += 0.0511;
+      
       const redWinterCount = redWinterCharactersWithoutCherino.filter(
         character => party.includes(character)
       ).length;
@@ -1501,19 +1524,29 @@ export default function TlScreen({ tlname }) {
       const limitedCount = Math.min(redWinterCount, 3);
       recovery += limitedCount * 0.0146;
     }
-
-    // exコストブースターに関する処理
-    for (let i = 0; i < party.length; i++) {
-      if (exCostBoost.some(student => student.name === party[i])) {
-        for (let j = rowCol-1; j > 0; j--) {
-          if (data[j].event === (party[i] + " start")) {
-            recovery += exCostBoost.find(boost => boost.name === party[i]).costRecovery;
-            break;
+    
+    const boostCharacters = party.filter(student => 
+      exCostBoost.some(booster => booster.name === student)
+    );
+    if (boostCharacters.length > 0) {
+      for (let student of boostCharacters) {
+        if (charaToTiming[student] !== undefined) {
+          let isBoosting = false;
+          for (let i = 0; i < charaToTiming[student].length; i+=2) {
+            if (charaToTiming[student][i] <= now && charaToTiming[student][i+1] >= now) {
+              isBoosting = true;
+            }
           }
-          if (data[j].event === (party[i] + " end")) {
-            break;
+          if (isBoosting) {
+            recovery += exCostBoost.find(booster => booster.name === student).costRecovery;
           }
         }
+      }
+    }
+
+    for (let student of dropout) {
+      if (!charaToTiming[student]) {
+        delete charaToTiming[student];
       }
     }
     
@@ -1524,12 +1557,13 @@ export default function TlScreen({ tlname }) {
     if (hasBoostCharacter) {
       recovery *= 1.2029;
     }
-    
     return recovery;
-  };
+      
+  }
+
 
 // タイミング列のフォーマット処理を追加
-  const formatTimingValue = (value, costRecovery, prevCost, prevElapsedTime, currentRowIndex, newElapsedTimes) => {
+  const formatTimingValue = (value, rowCol, prevCostRecovery, prevCost, prevElapsedTime, currentRowIndex, newElapsedTimes) => {
     // 数式パターンをチェック（=で始まる場合）
     if (typeof value === 'string' && value.trim().startsWith('=')) {
       try {
@@ -1708,9 +1742,9 @@ export default function TlScreen({ tlname }) {
     // 数値に変換を試みる
     const numValue = parseFloat(value);
     
-    if (!isNaN(numValue) && costRecovery > 0) {
+    if (!isNaN(numValue)) {
       // 数値をコスト回復力で割る
-      const timeInSeconds = (numValue - prevCost) / costRecovery + prevElapsedTime;
+      const timeInSeconds = inverseCalculateRemainingCost(numValue, prevCostRecovery, prevCost, prevElapsedTime);
       
       return timeInSeconds;
     }
@@ -1801,39 +1835,24 @@ export default function TlScreen({ tlname }) {
     const newCostRecovery = {};
     const newCostRecoveryToDisplay = {};
     const newRequiredCost = {};
-    const newTimingRemainingTime = {};
     const newOverflowCosts = {};
+    const newDropouts = {};
+    charaToTiming = {};
+    noaTimes = 0;
 
-    // まずは元のデータから初期値をコピー
-    if (calculatedValues.length > 0) {
-      const firstRow = calculatedValues[0];
-      newCol[0] = firstRow.col;
-      newRemainingTimes[0] = firstRow.remainingTime;
-      newRemainingCosts[0] = firstRow.remainingCost;
-      newElapsedTimes[0] = firstRow.elapsedTime;
-      newDisplayCosts[0] = firstRow.remainingCost;
-      newPartys[0] = firstRow.party;
-      newSuggestions[0] = firstRow.suggestion;
-      newCumulativeCosts[0] = firstRow.cumulativeCost;
-      newCostRecovery[0] = firstRow.costRecovery;
-      newCostRecoveryToDisplay[0] = firstRow.costRecoveryToDisplay;
-      newRequiredCost[0] = firstRow.requiredCost;
-      newTimingRemainingTime[0] = firstRow.timingRemainingTime;
-    } else {
-      // 配列が空の場合は初期値をセットするよ～♪
-      newCol[0] = 0;
-      newRemainingTimes[0] = `${Math.floor((battleTime-2) / 60)}:${Math.floor((battleTime-2) % 60).toString().padStart(2, '0')}.000`;
-      newRemainingCosts[0] = initialCost;
-      newElapsedTimes[0] = 2.0;
-      newDisplayCosts[0] = initialCost;
-      newPartys[0] = [];
-      newSuggestions[0] = [];
-      newCumulativeCosts[0] = 0;
-      newCostRecovery[0] = null;
-      newCostRecoveryToDisplay[0] = null;
-      newRequiredCost[0] = null;
-      newTimingRemainingTime[0] = null;
-    }
+    // 初期値をセットするよ～♪
+    newCol[0] = 0;
+    newRemainingTimes[0] = `${Math.floor((battleTime-2) / 60)}:${Math.floor((battleTime-2) % 60).toString().padStart(2, '0')}.000`;
+    newRemainingCosts[0] = initialCost;
+    newElapsedTimes[0] = 2.0;
+    newDisplayCosts[0] = initialCost.toFixed(1);
+    newPartys[0] = [];
+    newSuggestions[0] = [];
+    newCumulativeCosts[0] = 0;
+    newCostRecovery[0] = calculateInitialCostRecovery();
+    newCostRecoveryToDisplay[0] = null;
+    newRequiredCost[0] = null;
+    newDropouts[0] = [];
 
     let cumulativeCost = 0;
     // 先頭行から順に計算（戦闘開始行はそのまま）
@@ -1850,6 +1869,7 @@ export default function TlScreen({ tlname }) {
       }
       
       const prevRowCol = prevRow.col;
+      const prevCostRecovery = newCostRecovery[prevRowCol];
 
       newCol[i] = row.col;
       // 必要コストと累積コストの更新
@@ -1860,15 +1880,11 @@ export default function TlScreen({ tlname }) {
       newRequiredCost[i] = requiredCost === 0 ? null : requiredCost;
       newCumulativeCosts[i] = cumulativeCost;
 
+      // ドロップアウトの更新
+      newDropouts[i] = row.dropout ? [...newDropouts[i-1], ...JSON.parse(row.dropout)] : newDropouts[i-1];
       // 現在のパーティを取得
-      const party = getCurrentParty(i);
+      const party = suggestions.filter(student => !newDropouts[i].includes(student));
       newPartys[i] = party;
-
-      // 残り時間と残りコストの計算
-      // まずはコスト回復力の計算
-      const costRecovery = calculateCostRecovery(party, row);
-      newCostRecovery[i] = costRecovery;
-      newCostRecoveryToDisplay[i] = costRecovery.toFixed(4);
       
       // 前の行の残りコストを取得
       let prevCost = 0;
@@ -1880,7 +1896,7 @@ export default function TlScreen({ tlname }) {
       // 前の行の経過時間を取得
       const prevElapsedTime = newElapsedTimes[prevRowCol];
       // サジェスト候補の取得
-      const availableSuggestions = getAvailableSuggestionsForRow(party, i, costRecovery, prevCost, prevElapsedTime, newElapsedTimes);
+      const availableSuggestions = getAvailableSuggestionsForRow(party, i, prevCostRecovery, prevCost, prevElapsedTime, newElapsedTimes);
       newSuggestions[i] = availableSuggestions; 
 
       // イベント列が空の場合は前の行の値をコピー
@@ -1889,116 +1905,146 @@ export default function TlScreen({ tlname }) {
         newRemainingCosts[row.col] = newRemainingCosts[prevRowCol];
         newElapsedTimes[row.col] = newElapsedTimes[prevRowCol];
         newDisplayCosts[row.col] = newDisplayCosts[prevRowCol];
+        const costRecovery = (JSON.parse(row.dropout).length > 0)? calculateCostRecoveryWhenPartyChange(newElapsedTimes[row.col], JSON.parse(row.dropout), party) : calculateCostRecovery(newElapsedTimes[row.col], prevCostRecovery, prevElapsedTime);
+        newCostRecovery[i] = costRecovery;
+        newCostRecoveryToDisplay[i] = costRecovery.toFixed(4);
       } else {
-        // 必要コスト/回復力で時間を計算（回復力が0の場合はエラーを防ぐ）
-        if (costRecovery > 0) {
+        if (row.event.replace("(リオ©)", "") === "ヒナ(ドレス)" || row.event === "ヒナ(ドレス) 1射目" || row.event === "ヒナ(ドレス) 2射目" || row.event === "ヒナ(ドレス) 3射目") {
+          let dressHina = i;
+          for (let j = i-1; j > 0; j--) {
+            if (data[j].event.replace("(リオ©)", "") === "ヒナ(ドレス)" || data[j].event === "ヒナ(ドレス) 1射目" || data[j].event === "ヒナ(ドレス) 2射目" || data[j].event === "ヒナ(ドレス) 3射目") {
+              dressHina = j;
+              break;
+            }
+          }
+          let leastPlusTime = 0;
+          if (dressHina === i) {
+            dressHina = i-1;
+          } else if (data[dressHina].event.replace("(リオ©)", "") === "ヒナ(ドレス)") {
+            leastPlusTime = 1.8;
+          } else if (data[dressHina].event.replace("(リオ©)", "") === "ヒナ(ドレス) 1射目") {
+            leastPlusTime = 2.367;
+          } else if (data[dressHina].event.replace("(リオ©)", "") === "ヒナ(ドレス) 2射目") {
+            leastPlusTime = 3.1;
+          } else if (data[dressHina].event.replace("(リオ©)", "") === "ヒナ(ドレス) 3射目") {
+            leastPlusTime = 2.2;
+          }
+          const timing = row.late ? 10.0 : row.timing;
+          let formattedTiming = formatTimingValue(timing, row.col, prevCostRecovery, prevCost, prevElapsedTime, i, newElapsedTimes);
 
+          if (formattedTiming) {
+            newElapsedTimes[row.col] = formattedTiming;  
+          } else {
+            const timeRequired = inverseCalculateRemainingCost(requiredCost,  prevCostRecovery, prevCost, prevElapsedTime) - prevElapsedTime;
+            
+            // 新しい残り時間を計算（秒単位）
+            const newElapsedTime = prevElapsedTime + Math.max(0.5, timeRequired);
+            newElapsedTimes[row.col] = newElapsedTime;
+          }
+          newElapsedTimes[row.col] = Math.max(newElapsedTimes[dressHina] + leastPlusTime, newElapsedTimes[row.col]);
+          newElapsedTimes[row.col] = Math.max(newElapsedTimes[row.col], row.late ? 10.0 : row.timing);
+          const minutes = Math.floor((battleTime - newElapsedTimes[row.col]) / 60);
+          const seconds = Math.floor((battleTime - newElapsedTimes[row.col]) % 60);
+          const ms = Math.round(((battleTime - newElapsedTimes[row.col]) % 1) * 1000);
+          newRemainingTimes[row.col] = `${minutes}:${seconds.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+          const temp = calculateRemainingCostAndCostRecovery(newElapsedTimes[row.col], prevCostRecovery, prevCost, prevElapsedTime);
+          newRemainingCosts[row.col] = temp[0] - requiredCost;
+          newCostRecovery[i] = JSON.parse(row.dropout).length > 0 ? calculateCostRecoveryWhenPartyChange(newElapsedTimes[row.col], JSON.parse(row.dropout), party) : temp[1];
+          newDisplayCosts[row.col] = (Math.abs(newRemainingCosts[row.col])< 1e-10 ? 0.0 : newRemainingCosts[row.col]).toFixed(1);  
+          newCostRecoveryToDisplay[i] = newCostRecovery[i].toFixed(4);
+        } else {
+          // 前の行でexコストブースターがex発動した場合
+          if (exCostBoost.some(student => student.name === data[row.col-1].event.replace("(リオ©)", ""))) {
+            if (data[row.col-1].event.replace("(リオ©)", "") === "ノア(パジャマ)") {
+              noaTimes++;
+              if (noaTimes%3 === 2) {
+                if (charaToTiming[data[row.col-1].event.replace("(リオ©)", "")] === undefined) {
+                  charaToTiming[data[row.col-1].event.replace("(リオ©)", "")] = [];
+                }
+                const costEvent = exCostBoost.find(student => student.name === "ノア(パジャマ)");
+                const startTime = costEvent.start + newElapsedTimes[row.col-1];
+                const endTime = costEvent.end + newElapsedTimes[row.col-1];
 
-          if (row.event.replace("(リオ©)", "") === "ヒナ(ドレス)" || row.event === "ヒナ(ドレス) 1射目" || row.event === "ヒナ(ドレス) 2射目" || row.event === "ヒナ(ドレス) 3射目") {
-            let dressHina = i;
-            for (let j = i-1; j > 0; j--) {
-              if (data[j].event.replace("(リオ©)", "") === "ヒナ(ドレス)" || data[j].event === "ヒナ(ドレス) 1射目" || data[j].event === "ヒナ(ドレス) 2射目" || data[j].event === "ヒナ(ドレス) 3射目") {
-                dressHina = j;
-                break;
+                if (charaToTiming["ノア(パジャマ)"].length === 0) {
+                  charaToTiming["ノア(パジャマ)"].push(startTime);
+                  charaToTiming["ノア(パジャマ)"].push(endTime);
+                } else if (charaToTiming["ノア(パジャマ)"][charaToTiming["ノア(パジャマ)"].length - 1] < startTime) {
+                  charaToTiming["ノア(パジャマ)"].push(startTime);
+                  charaToTiming["ノア(パジャマ)"].push(endTime);
+                } else {
+                  charaToTiming["ノア(パジャマ)"].pop();
+                  charaToTiming["ノア(パジャマ)"].push(endTime);
+                }
               }
-            }
-            let leastPlusTime = 0;
-            if (dressHina === i) {
-              dressHina = i-1;
-            } else if (data[dressHina].event.replace("(リオ©)", "") === "ヒナ(ドレス)") {
-              leastPlusTime = 1.8;
-            } else if (data[dressHina].event.replace("(リオ©)", "") === "ヒナ(ドレス) 1射目") {
-              leastPlusTime = 2.367;
-            } else if (data[dressHina].event.replace("(リオ©)", "") === "ヒナ(ドレス) 2射目") {
-              leastPlusTime = 3.1;
-            } else if (data[dressHina].event.replace("(リオ©)", "") === "ヒナ(ドレス) 3射目") {
-              leastPlusTime = 2.2;
-            }
-            const timing = row.late ? 10.0 : row.timing;
-            let formattedTiming = formatTimingValue(timing, costRecovery, prevCost, prevElapsedTime, i, newElapsedTimes);
-
-            if (formattedTiming) {
-              newElapsedTimes[row.col] = formattedTiming;  
             } else {
-              const timeRequired = (requiredCost - prevCost) / costRecovery;
+              if (charaToTiming[data[row.col-1].event.replace("(リオ©)", "")] === undefined) {
+                charaToTiming[data[row.col-1].event.replace("(リオ©)", "")] = [];
+              }
+              const costEvent = exCostBoost.find(student => student.name === data[row.col-1].event.replace("(リオ©)", ""));
+              const startTime = costEvent.start + newElapsedTimes[row.col-1];
+              const endTime = costEvent.end + newElapsedTimes[row.col-1];
               
-              // 新しい残り時間を計算（秒単位）
-              const newElapsedTime = prevElapsedTime + Math.max(0.5, timeRequired);
-              newElapsedTimes[row.col] = newElapsedTime;
-            }
-            newElapsedTimes[row.col] = Math.max(newElapsedTimes[dressHina] + leastPlusTime, newElapsedTimes[row.col]);
-            newElapsedTimes[row.col] = Math.max(newElapsedTimes[row.col], row.late ? 10.0 : row.timing);
-            const minutes = Math.floor((battleTime - newElapsedTimes[row.col]) / 60);
-            const seconds = Math.floor((battleTime - newElapsedTimes[row.col]) % 60);
-            const ms = Math.round(((battleTime - newElapsedTimes[row.col]) % 1) * 1000);
-            newRemainingTimes[row.col] = `${minutes}:${seconds.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
-            newRemainingCosts[row.col] = (newElapsedTimes[row.col] - prevElapsedTime) * costRecovery + prevCost - requiredCost;
-            newDisplayCosts[row.col] = (Math.abs(newRemainingCosts[row.col])< 1e-10 ? 0.0 : newRemainingCosts[row.col]).toFixed(1);  
-          // exコストブースター + " start" または　+ " end" の場合
-          } else if (exCostBoost.some(student => ((student.name + " start") === row.event) || ((student.name + " end") === row.event))) {
-            const booster = exCostBoost.find(student => student.name === row.event.replace(" start", "").replace(" end", ""));
-            const stName = booster.name;
-            let plusTime = 0;
-            let exCol = i;
-            if (row.event === (stName + " start")) {
-              for (let j = i-1; j > 0; j--) {
-                if (data[j].event.replace("(リオ©)", "") === stName) {
-                  exCol = j;
-                  break;
-                }
+              if (charaToTiming[data[row.col-1].event.replace("(リオ©)", "")].length === 0) {
+                charaToTiming[data[row.col-1].event.replace("(リオ©)", "")].push(startTime);
+                charaToTiming[data[row.col-1].event.replace("(リオ©)", "")].push(endTime);
+              } else if (charaToTiming[data[row.col-1].event.replace("(リオ©)", "")][charaToTiming[data[row.col-1].event.replace("(リオ©)", "")].length - 1] < startTime) {
+                charaToTiming[data[row.col-1].event.replace("(リオ©)", "")].push(startTime);
+                charaToTiming[data[row.col-1].event.replace("(リオ©)", "")].push(endTime);
+              } else {
+                charaToTiming[data[row.col-1].event.replace("(リオ©)", "")].pop();
+                charaToTiming[data[row.col-1].event.replace("(リオ©)", "")].push(endTime);
               }
-              plusTime = booster.start;
-            } else {
-              for (let j = i-1; j > 0; j--) {
-                if (data[j].event === (stName + " start")) {
-                  exCol = j;
-                  break;
-                }
-              }
-              plusTime = booster.duration;
             }
-            newElapsedTimes[row.col] = newElapsedTimes[exCol] + plusTime;
-            const minutes = Math.floor((battleTime - newElapsedTimes[row.col]) / 60);
-            const seconds = Math.floor((battleTime - newElapsedTimes[row.col]) % 60);
-            const ms = Math.round(((battleTime - newElapsedTimes[row.col]) % 1) * 1000);
+          }
+        
+          sortedCostEvents = [];
+          for (let key of Object.keys(charaToTiming)) {
+            for (let j = 0; j < charaToTiming[key].length; j++) {
+              sortedCostEvents.push({
+                elapsedTime: charaToTiming[key][j],
+                costRecovery: exCostBoost.find(student => student.name === key).costRecovery 
+                                        * (j%2 === 0 ? 1.0 : -1.0) 
+                                        * (ssCostBoost.some(student => suggestions.includes(student)) ? 1.2029 : 1.0)
+              });
+            }
+          }
+          sortedCostEvents = sortedCostEvents.sort((a, b) => a.elapsedTime - b.elapsedTime);
+
+          // タイミング列を変換したものを取得、そして更新
+          const timing = row.late ? 10.0 : row.timing;
+          let formattedTiming = formatTimingValue(timing, row.col, prevCostRecovery, prevCost, prevElapsedTime, i, newElapsedTimes);
+
+          if (formattedTiming) {
+            newElapsedTimes[row.col] = formattedTiming;
+            const minutes = Math.floor((battleTime - formattedTiming) / 60);
+            const seconds = Math.floor((battleTime - formattedTiming) % 60);
+            const ms = Math.round(((battleTime - formattedTiming) % 1) * 1000);
             newRemainingTimes[row.col] = `${minutes}:${seconds.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
-            newRemainingCosts[row.col] = (newElapsedTimes[row.col] - prevElapsedTime) * costRecovery + prevCost - requiredCost;
+            const temp = calculateRemainingCostAndCostRecovery(formattedTiming, prevCostRecovery, prevCost, prevElapsedTime);
+            newRemainingCosts[row.col] = temp[0] - requiredCost;
+            newCostRecovery[i] = JSON.parse(row.dropout).length > 0 ? calculateCostRecoveryWhenPartyChange(formattedTiming, JSON.parse(row.dropout), party) : temp[1];
+            newCostRecoveryToDisplay[i] = newCostRecovery[i].toFixed(4);
             newDisplayCosts[row.col] = (Math.abs(newRemainingCosts[row.col])< 1e-10 ? 0.0 : newRemainingCosts[row.col]).toFixed(1);   
           } else {
-            // タイミング列を変換したものを取得、そして更新
-            const timing = row.late ? 10.0 : row.timing;
-            let formattedTiming = formatTimingValue(timing, costRecovery, prevCost, prevElapsedTime, i, newElapsedTimes);
-
-            if (formattedTiming) {
-              newElapsedTimes[row.col] = formattedTiming;
-              const minutes = Math.floor((battleTime - formattedTiming) / 60);
-              const seconds = Math.floor((battleTime - formattedTiming) % 60);
-              const ms = Math.round(((battleTime - formattedTiming) % 1) * 1000);
-              newRemainingTimes[row.col] = `${minutes}:${seconds.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
-              newRemainingCosts[row.col] = (newElapsedTimes[row.col] - prevElapsedTime) * costRecovery + prevCost - requiredCost;
-              newDisplayCosts[row.col] = (Math.abs(newRemainingCosts[row.col])< 1e-10 ? 0.0 : newRemainingCosts[row.col]).toFixed(1);   
-            } else {
-              const timeRequired = (requiredCost - prevCost) / costRecovery;
-              
-              // 新しい残り時間を計算（秒単位）
-              const newElapsedTime = prevElapsedTime + Math.max(0.5, timeRequired);
-              newElapsedTimes[row.col] = newElapsedTime;
-
-              // 秒単位から mm:ss.ms 形式に変換して格納
-              const newMinutes = Math.floor((battleTime - newElapsedTime) / 60);
-              const newSeconds = Math.floor((battleTime - newElapsedTime) % 60);
-              const newMs = Math.floor(((battleTime - newElapsedTime) % 1) * 1000);
-              
-              newRemainingTimes[row.col] = `${newMinutes}:${newSeconds.toString().padStart(2, '0')}.${newMs.toString().padStart(3, '0')}`;
+            const timeRequired = inverseCalculateRemainingCost(requiredCost, prevCostRecovery, prevCost, prevElapsedTime) - prevElapsedTime;
             
-              // 時間差分を計算
-              const timeDifference = newElapsedTime - prevElapsedTime;
-              
-              // 残りコストを計算 (前のコスト + 回復力*時間差分 - 必要コスト)
-              const newCost = prevCost + (costRecovery * timeDifference) - requiredCost;
-              newRemainingCosts[row.col] = newCost;
-              newDisplayCosts[row.col] = (Math.abs(newCost) < 1e-10 ? 0.0 : newCost).toFixed(1);
-            }
+            // 新しい残り時間を計算（秒単位）
+            const newElapsedTime = prevElapsedTime + Math.max(0.5, timeRequired);
+            newElapsedTimes[row.col] = newElapsedTime;
+
+            // 秒単位から mm:ss.ms 形式に変換して格納
+            const newMinutes = Math.floor((battleTime - newElapsedTime) / 60);
+            const newSeconds = Math.floor((battleTime - newElapsedTime) % 60);
+            const newMs = Math.floor(((battleTime - newElapsedTime) % 1) * 1000);
+            
+            newRemainingTimes[row.col] = `${newMinutes}:${newSeconds.toString().padStart(2, '0')}.${newMs.toString().padStart(3, '0')}`;
+            
+            // 残りコストを計算 (前のコスト + 回復力*時間差分 - 必要コスト)
+            const temp = calculateRemainingCostAndCostRecovery(newElapsedTime, prevCostRecovery, prevCost, prevElapsedTime);
+            newRemainingCosts[row.col] = temp[0] - requiredCost;
+            newDisplayCosts[row.col] = (Math.abs(newRemainingCosts[row.col]) < 1e-10 ? 0.0 : newRemainingCosts[row.col]).toFixed(1);
+            newCostRecovery[i] = JSON.parse(row.dropout).length > 0 ? calculateCostRecoveryWhenPartyChange(newElapsedTime, JSON.parse(row.dropout), party) : temp[1];
+            newCostRecoveryToDisplay[i] = newCostRecovery[i].toFixed(4);
           }
         }
       }
@@ -2028,7 +2074,6 @@ export default function TlScreen({ tlname }) {
         costRecovery: newCostRecovery[col],
         costRecoveryToDisplay: newCostRecoveryToDisplay[col],
         requiredCost: newRequiredCost[col],
-        timingRemainingTime: newTimingRemainingTime[col],
         overflowCost: newOverflowCosts[col] || '0.0'
       };
     });
@@ -2081,9 +2126,10 @@ export default function TlScreen({ tlname }) {
   };
   // 初期のデータ取得と計算
   useEffect(() => {
-    fetchData();
-    fetchParty();
-    updateCalculatedValues();
+    (async () => {
+      await fetchParty();
+      await fetchData();
+    })();
   }, [tlname]);
 
   // キーボードショートカットの設定
@@ -2123,7 +2169,7 @@ export default function TlScreen({ tlname }) {
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 5, // 5px以上動かさないとドラッグ開始しないよ～
+        distance: 3, // 3px以上動かさないとドラッグ開始しないよ～
       },
     }),
     useSensor(KeyboardSensor, {
@@ -2236,9 +2282,13 @@ export default function TlScreen({ tlname }) {
       // 各行のデータを配列に追加
       const firstTimeRegex = /(\d+):(\d{2})(?:\.(\d{1,3}))?/;
 
-      calcValue?.party.includes(row.event.replace("(リオ©)", "").replace(" 1射目", "").replace(" 2射目", "").replace(" 3射目", "")) && rows.push([
+      calcValue?.party.includes(row.event.replace("(リオ©)", "").replace(" 1射目", "").replace(" 2射目", "").replace(" 3射目", "").replace("ブチギレ", "")) ? rows.push([
         !row.late && !row.timing ? '' : (firstTimeRegex.test(row.timing) ?  calcValue?.remainingTime : (Number.isInteger(useCost)? useCost.toFixed(0) : useCost.toFixed(1))),
         (!row.late && !row.timing ? '即' : '') + row.event + (row.subject ? ' => ' + row.subject : ''),
+        row.memo
+      ]) : rows.push([
+        '',
+        row.event,
         row.memo
       ]);
 
@@ -2678,7 +2728,8 @@ export default function TlScreen({ tlname }) {
               subject: '対象',
               memo: 'メモ',
               dropout: '脱落キャラ',
-              overflowCost: '消失コスト'
+              overflowCost: '消失コスト',
+              score: 'スコア'
             }).map(([key, label]) => (
               <Button
                 key={key}
